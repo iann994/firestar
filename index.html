@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>火之術 • 多重結界闖關與編輯器</title>
+    <title>火之術 • 多重結界闖關與極速影音系統</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/vision_bundle.js" crossorigin="anonymous"></script>
     <style>
@@ -16,7 +16,7 @@
         .fire-jutsu-text { animation: pulseGlow 1.4s infinite ease-in-out; }
         .glass-panel { background: rgba(18, 18, 26, 0.92); backdrop-filter: blur(14px); border: 1px solid rgba(255, 255, 255, 0.12); }
         
-        /* 媒體容器尺寸樣式 */
+        /* 媒體容器尺寸與硬體加速樣式 */
         .media-default {
             top: 50%;
             left: 50%;
@@ -31,6 +31,10 @@
             height: 100vh;
             transform: none;
         }
+        #rewardVideo {
+            transform: translateZ(0);
+            will-change: transform;
+        }
     </style>
 </head>
 <body class="bg-[#060609] text-white select-none">
@@ -41,18 +45,18 @@
             <div class="w-16 h-16 mx-auto mb-4 rounded-full bg-amber-500/20 flex items-center justify-center text-amber-400 animate-bounce">
                 <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"></path></svg>
             </div>
-            <h2 class="text-xl font-bold text-amber-400 mb-2">點擊畫面開啟結印系統</h2>
-            <p class="text-xs text-zinc-300 leading-relaxed">授權瀏覽器播放結印音效與多招式音頻。</p>
-            <button class="mt-5 px-6 py-2.5 bg-gradient-to-r from-amber-500 to-orange-600 rounded-xl text-xs font-bold text-black shadow-lg hover:scale-105 transition">開啟並進入體驗</button>
+            <h2 class="text-xl font-bold text-amber-400 mb-2">點擊畫面啟動結印系統</h2>
+            <p class="text-xs text-zinc-300 leading-relaxed">授權瀏覽器播放聲音並載入影音快取。</p>
+            <button class="mt-5 px-6 py-2.5 bg-gradient-to-r from-amber-500 to-orange-600 rounded-xl text-xs font-bold text-black shadow-lg hover:scale-105 transition">進入體驗</button>
         </div>
     </div>
 
     <!-- 隱藏視訊元素 -->
     <video id="webcam" class="hidden" autoplay playsinline></video>
 
-    <!-- 中央/滿版多媒體展示區域 -->
+    <!-- 媒體展示區域 (支援滿版與硬體加速) -->
     <div id="mediaContainer" class="absolute z-30 pointer-events-none transition-all duration-500 opacity-0 media-default">
-        <video id="rewardVideo" class="w-full h-full object-cover rounded-2xl shadow-2xl hidden" autoplay muted playsinline></video>
+        <video id="rewardVideo" class="w-full h-full object-cover rounded-2xl shadow-2xl hidden" preload="auto" muted playsinline webkit-playsinline></video>
         <img id="rewardImg" class="w-full h-full object-cover rounded-2xl shadow-2xl hidden" alt="Reward Media" />
     </div>
 
@@ -174,9 +178,30 @@
             let width = window.innerWidth;
             let height = window.innerHeight;
             let isEditMode = false;
+            let isPlayingReward = false; // 用於影片播放時暫停背景動畫
             let draggingNodeIndex = -1;
             let currentStageIndex = 0;
             let editingStageIndex = 0;
+
+            // Blob 記憶體快取字典（解決 11MB 影片即時讀取卡頓）
+            const preloadedVideoBlobs = {};
+
+            async function preloadAllStageVideos() {
+                for (let i = 0; i < stages.length; i++) {
+                    const url = stages[i].mediaUrl;
+                    if (url && url.match(/\.(mp4|webm|ogg)$/i)) {
+                        try {
+                            console.log(`[預加載] 正在將關卡 ${i + 1} 影片載入記憶體...`);
+                            const res = await fetch(url);
+                            const blob = await res.blob();
+                            preloadedVideoBlobs[url] = URL.createObjectURL(blob);
+                            console.log(`[預加載] 關卡 ${i + 1} 影片載入完成！`);
+                        } catch (e) {
+                            console.warn(`[預加載] 關卡 ${i + 1} 預載失敗，將使用遠端串流`, e);
+                        }
+                    }
+                }
+            }
 
             // Web Audio API
             let audioCtx = null;
@@ -220,7 +245,6 @@
             window.addEventListener('resize', resizeCanvas);
             resizeCanvas();
 
-            // 多招式關卡資料結構 (增加 isFullScreen 欄位)
             let stages = [];
 
             function loadSavedStages() {
@@ -231,6 +255,7 @@
                     setDefaultStages();
                 }
                 updateStageDisplay();
+                preloadAllStageVideos(); // 啟動背景預先載入
             }
 
             function setDefaultStages() {
@@ -290,7 +315,6 @@
             let handLandmarker = undefined;
             let webcamRunning = false;
 
-            // 模式切換邏輯
             editToggleBtn.addEventListener('click', () => {
                 isEditMode = !isEditMode;
                 if (isEditMode) {
@@ -305,6 +329,7 @@
                     playControls.classList.remove('hidden');
                     editorControls.classList.add('hidden');
                     saveStagesToStorage();
+                    preloadAllStageVideos(); // 重新載入快取
                     resetStage();
                 }
             });
@@ -348,6 +373,7 @@
 
             saveConfigBtn.addEventListener('click', () => {
                 saveStagesToStorage();
+                preloadAllStageVideos();
                 alert("所有招式與結界點配置已儲存！");
             });
 
@@ -385,12 +411,12 @@
                 rewardVideo.classList.add('hidden');
                 rewardImg.classList.add('hidden');
                 rewardVideo.pause();
+                isPlayingReward = false;
                 updateProgress();
             }
 
             resetBtn.addEventListener('click', resetStage);
 
-            // 滑鼠編輯點點事件
             canvas.addEventListener('pointerdown', (e) => {
                 if (!isEditMode) return;
                 const rect = canvas.getBoundingClientRect();
@@ -427,7 +453,6 @@
 
             canvas.addEventListener('pointerup', () => { draggingNodeIndex = -1; });
 
-            // 相機追蹤
             modeToggleBtn.addEventListener('click', () => {
                 useCamera = !useCamera;
                 modeToggleBtn.textContent = useCamera ? '切換: 相機追蹤' : '切換: 滑鼠模式';
@@ -482,7 +507,6 @@
                 if (webcamRunning) requestAnimationFrame(predictWebcam);
             }
 
-            // 圓形光點粒子
             class GlowParticle {
                 constructor(x, y, color, sizeMult, isFire = false) {
                     this.x = x; this.y = y; this.color = color; this.isFire = isFire;
@@ -564,20 +588,18 @@
                 }
             }
 
-            // 當前關卡成功爆破與進度推進
             async function triggerStageSuccess() {
                 const stage = stages[currentStageIndex];
-                
+                isPlayingReward = true; // 暫停背景動畫，全力播放影片
+
                 jutsuBannerText.textContent = stage.name;
                 jutsuSubBanner.textContent = `✨ STAGE ${currentStageIndex + 1} UNLOCKED ✨`;
                 jutsuBanner.style.opacity = '1';
                 setTimeout(() => { jutsuBanner.style.opacity = '0'; }, 2500);
 
-                // 音效播放
                 const audio = new Audio(stage.audioUrl || DEFAULT_AUDIO_URL);
                 audio.play().catch(e => console.log(e));
 
-                // 爆破光點粒子
                 const centerX = width / 2;
                 const centerY = height / 2;
                 const theme = stage.colorTheme || ['#ffe066','#fb8500','#ff4d6d'];
@@ -586,25 +608,23 @@
                     particles.push(new GlowParticle(centerX, centerY, color, 1.5, true));
                 }
 
-                // 設定是否滿版全螢幕樣式
                 if (stage.isFullScreen) {
                     mediaContainer.className = "absolute z-30 pointer-events-none transition-all duration-500 opacity-0 media-fullscreen";
                 } else {
                     mediaContainer.className = "absolute z-30 pointer-events-none transition-all duration-500 opacity-0 media-default";
                 }
 
-                // 展現媒體
                 mediaContainer.classList.remove('opacity-0');
                 await playMediaItem(stage.mediaUrl || DEFAULT_GIF_URL);
                 mediaContainer.classList.add('opacity-0');
 
-                // 推進關卡 (Stage Progress)
+                isPlayingReward = false; // 恢復背景動畫
+
                 if (currentStageIndex < stages.length - 1) {
                     currentStageIndex++;
                     updateStageDisplay();
                     resetStage();
                 } else {
-                    // 全關卡通關（Grand Clearance）
                     setTimeout(() => {
                         alert("🎉 恭喜通關！您已完美解鎖所有忍者結界與終極奧義！");
                         currentStageIndex = 0;
@@ -620,9 +640,20 @@
                     if (isVideo) {
                         rewardImg.classList.add('hidden');
                         rewardVideo.classList.remove('hidden');
-                        rewardVideo.src = url;
-                        rewardVideo.play().catch(e => resolve());
-                        rewardVideo.onended = () => resolve();
+
+                        // 優先使用記憶體中的 Blob 快取，實現 0 延遲秒播
+                        const finalSrc = preloadedVideoBlobs[url] || url;
+                        if (rewardVideo.src !== finalSrc) {
+                            rewardVideo.src = finalSrc;
+                        }
+
+                        rewardVideo.currentTime = 0;
+                        rewardVideo.play().then(() => {
+                            rewardVideo.onended = () => resolve();
+                        }).catch(e => {
+                            console.warn("Video play error:", e);
+                            resolve();
+                        });
                     } else {
                         rewardVideo.classList.add('hidden');
                         rewardImg.classList.remove('hidden');
@@ -648,7 +679,8 @@
                 const activeStage = isEditMode ? stages[editingStageIndex] : stages[currentStageIndex];
                 const targetNodes = activeStage.nodes;
 
-                if (!isEditMode && handPos.active && activeNodeIndex < targetNodes.length) {
+                // 如果正在播放大影片，暫停手勢碰撞偵測以省下 CPU/GPU 資源
+                if (!isPlayingReward && !isEditMode && handPos.active && activeNodeIndex < targetNodes.length) {
                     const target = targetNodes[activeNodeIndex];
                     const dist = Math.hypot(handPos.x - target.x, handPos.y - target.y);
                     if (dist < target.radius + 15) {
