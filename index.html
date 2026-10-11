@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>火之術 • 多重結界闖關與編輯器</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/vision_bundle.js" crossorigin="anonymous"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #060609; font-family: system-ui, -apple-system, sans-serif; touch-action: none; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        @keyframes pulseGlow {
+            0%, 100% { text-shadow: 0 0 15px rgba(255, 100, 0, 0.9), 0 0 30px rgba(255, 50, 0, 0.6); }
+            50% { text-shadow: 0 0 25px rgba(255, 160, 0, 1), 0 0 50px rgba(255, 90, 0, 0.9); }
+        }
+        .fire-jutsu-text { animation: pulseGlow 1.4s infinite ease-in-out; }
+        .glass-panel { background: rgba(18, 18, 26, 0.92); backdrop-filter: blur(14px); border: 1px solid rgba(255, 255, 255, 0.12); }
+        
+        /* 媒體容器尺寸樣式 */
+        .media-default {
+            top: 50%;
+            left: 50%;
+            width: 380px;
+            height: auto;
+            transform: translate(-50%, -50%);
+        }
+        .media-fullscreen {
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            transform: none;
+        }
+    </style>
+</head>
+<body class="bg-[#060609] text-white select-none">
+
+    <!-- 音訊解鎖遮罩 -->
+    <div id="audioStartOverlay" class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/85 backdrop-blur-md cursor-pointer transition-opacity duration-500">
+        <div class="text-center p-6 glass-panel rounded-3xl max-w-sm border border-amber-500/30 shadow-2xl">
+            <div class="w-16 h-16 mx-auto mb-4 rounded-full bg-amber-500/20 flex items-center justify-center text-amber-400 animate-bounce">
+                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"></path></svg>
+            </div>
+            <h2 class="text-xl font-bold text-amber-400 mb-2">點擊畫面開啟結印系統</h2>
+            <p class="text-xs text-zinc-300 leading-relaxed">授權瀏覽器播放結印音效與多招式音頻。</p>
+            <button class="mt-5 px-6 py-2.5 bg-gradient-to-r from-amber-500 to-orange-600 rounded-xl text-xs font-bold text-black shadow-lg hover:scale-105 transition">開啟並進入體驗</button>
+        </div>
+    </div>
+
+    <!-- 隱藏視訊元素 -->
+    <video id="webcam" class="hidden" autoplay playsinline></video>
+
+    <!-- 中央/滿版多媒體展示區域 -->
+    <div id="mediaContainer" class="absolute z-30 pointer-events-none transition-all duration-500 opacity-0 media-default">
+        <video id="rewardVideo" class="w-full h-full object-cover rounded-2xl shadow-2xl hidden" autoplay muted playsinline></video>
+        <img id="rewardImg" class="w-full h-full object-cover rounded-2xl shadow-2xl hidden" alt="Reward Media" />
+    </div>
+
+    <!-- 左上控制面板 -->
+    <div class="absolute top-4 left-4 z-40 glass-panel p-4 rounded-2xl shadow-2xl max-w-sm transition-all duration-300 overflow-y-auto max-h-[90vh] w-80">
+        <div class="flex items-center justify-between border-b border-zinc-700/60 pb-3">
+            <h1 class="text-sm font-bold text-amber-400 flex items-center gap-1.5">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                忍者連招結界系統
+            </h1>
+            <button id="editToggleBtn" class="px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs rounded-lg transition">編輯模式</button>
+        </div>
+
+        <!-- 體驗模式畫面 -->
+        <div id="playControls" class="mt-3 space-y-2">
+            <div id="stageTitle" class="text-xs font-bold text-amber-300 bg-amber-950/40 p-2 rounded-lg border border-amber-800/40 flex justify-between items-center">
+                <span>當前招式：招式一</span>
+                <span id="stageBadge" class="text-[10px] bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded">關卡 1/3</span>
+            </div>
+            
+            <div id="camStatus" class="flex items-center gap-2 text-[11px] font-medium text-cyan-400 bg-cyan-950/40 px-2 py-1 rounded-lg border border-cyan-800/50">
+                <span class="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+                相機載入中...（亦支援滑鼠拖曳）
+            </div>
+
+            <div class="flex items-center justify-between text-xs pt-1">
+                <span class="text-zinc-400">控制模式</span>
+                <button id="modeToggleBtn" class="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-xs rounded-lg font-semibold transition border border-zinc-700">切換: 相機追蹤</button>
+            </div>
+
+            <div class="pt-2 border-t border-zinc-800 flex justify-between items-center text-xs text-zinc-400">
+                <span id="progressText">已解鎖: 0 / 4</span>
+                <button id="resetBtn" class="hover:text-amber-300 underline font-medium">重置當前招式</button>
+            </div>
+        </div>
+
+        <!-- 編輯模式選單 -->
+        <div id="editorControls" class="mt-3 hidden space-y-3">
+            <div>
+                <label class="block text-[11px] text-zinc-400 mb-1">選擇要編輯的招式：</label>
+                <select id="stageSelect" class="w-full bg-zinc-900 border border-zinc-700 text-xs text-amber-400 font-bold rounded-lg px-2 py-1.5 focus:outline-none">
+                    <option value="0">招式一：火遁 • 豪火球</option>
+                    <option value="1">招式二：雷遁 • 千鳥陣</option>
+                    <option value="2">招式三：終極 • 奧義召喚</option>
+                </select>
+            </div>
+
+            <div class="space-y-2 border-t border-zinc-800 pt-2">
+                <label class="block text-[11px] text-zinc-400">本招式完成後播放的媒體 URL：</label>
+                <input type="text" id="stageMediaInput" placeholder="GIF / MP4 影片網址" class="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-[11px] text-zinc-200 focus:outline-none focus:border-amber-500" />
+                
+                <!-- 填滿畫面勾選框 -->
+                <div class="flex items-center gap-2 pt-0.5">
+                    <input type="checkbox" id="fullScreenCheckbox" class="w-4 h-4 accent-amber-500 rounded cursor-pointer" />
+                    <label for="fullScreenCheckbox" class="text-xs text-amber-300 font-semibold cursor-pointer">填滿畫面 (Full Screen)</label>
+                </div>
+
+                <label class="block text-[11px] text-zinc-400 pt-1">本招式完成後播放的聲音 URL：</label>
+                <input type="text" id="stageAudioInput" placeholder="MP3 音效網址" class="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-[11px] text-zinc-200 focus:outline-none focus:border-amber-500" />
+            </div>
+
+            <p class="text-[10px] text-amber-300/80 bg-amber-950/30 p-1.5 rounded border border-amber-800/30">
+                💡 <b>提示：</b> 點擊畫面上空白處<b>新增點點</b>；拖曳點點<b>調整位置</b>。
+            </p>
+
+            <div id="nodeList" class="space-y-1.5 max-h-36 overflow-y-auto pr-1"></div>
+
+            <div class="flex gap-2 pt-2 border-t border-zinc-800">
+                <button id="saveConfigBtn" class="flex-1 py-1.5 bg-emerald-600 hover:bg-emerald-500 font-bold text-xs rounded-lg transition">儲存所有配置</button>
+                <button id="clearStageNodesBtn" class="px-2.5 py-1.5 bg-rose-900/60 hover:bg-rose-800 text-rose-200 font-bold text-xs rounded-lg transition">清空本招點點</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 招式激活 Banner -->
+    <div id="jutsuBanner" class="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none z-30 text-center opacity-0 transition-opacity duration-500">
+        <div id="jutsuBannerText" class="text-3xl md:text-5xl font-black text-amber-500 tracking-widest fire-jutsu-text uppercase">
+            火遁 • 豪火球之術
+        </div>
+        <div id="jutsuSubBanner" class="text-xs md:text-sm text-cyan-300 font-semibold mt-2 tracking-wide drop-shadow-lg">
+            ✨ STAGE 1 UNLOCKED ✨
+        </div>
+    </div>
+
+    <canvas id="fireworksCanvas"></canvas>
+
+    <script>
+        window.onload = async function() {
+            const canvas = document.getElementById('fireworksCanvas');
+            const ctx = canvas.getContext('2d');
+            const videoElement = document.getElementById('webcam');
+            const mediaContainer = document.getElementById('mediaContainer');
+            const rewardVideo = document.getElementById('rewardVideo');
+            const rewardImg = document.getElementById('rewardImg');
+            const editToggleBtn = document.getElementById('editToggleBtn');
+            const playControls = document.getElementById('playControls');
+            const editorControls = document.getElementById('editorControls');
+            const stageSelect = document.getElementById('stageSelect');
+            const stageMediaInput = document.getElementById('stageMediaInput');
+            const fullScreenCheckbox = document.getElementById('fullScreenCheckbox');
+            const stageAudioInput = document.getElementById('stageAudioInput');
+            const nodeList = document.getElementById('nodeList');
+            const saveConfigBtn = document.getElementById('saveConfigBtn');
+            const clearStageNodesBtn = document.getElementById('clearStageNodesBtn');
+            const stageTitle = document.getElementById('stageTitle');
+            const stageBadge = document.getElementById('stageBadge');
+            const camStatus = document.getElementById('camStatus');
+            const progressText = document.getElementById('progressText');
+            const resetBtn = document.getElementById('resetBtn');
+            const modeToggleBtn = document.getElementById('modeToggleBtn');
+            const jutsuBanner = document.getElementById('jutsuBanner');
+            const jutsuBannerText = document.getElementById('jutsuBannerText');
+            const jutsuSubBanner = document.getElementById('jutsuSubBanner');
+            const overlay = document.getElementById('audioStartOverlay');
+
+            const DEFAULT_AUDIO_URL = "https://res.cloudinary.com/do3p1vjeh/video/upload/v1791720507/ElevenLabs_A_deafening_magical_explosion_paired_with_an_ancient_sage_s_voice___Behold_the_power_of_the_elements_lrrept.mp3";
+            const DEFAULT_GIF_URL = "https://res.cloudinary.com/do3p1vjeh/image/upload/v1791720221/flamefire_lyfk6r.gif";
+
+            let width = window.innerWidth;
+            let height = window.innerHeight;
+            let isEditMode = false;
+            let draggingNodeIndex = -1;
+            let currentStageIndex = 0;
+            let editingStageIndex = 0;
+
+            // Web Audio API
+            let audioCtx = null;
+            async function initAudio() {
+                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'suspended') await audioCtx.resume();
+            }
+
+            function playTouchSound() {
+                try {
+                    if (!audioCtx) return;
+                    const now = audioCtx.currentTime;
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(650, now);
+                    osc.frequency.exponentialRampToValueAtTime(1800, now + 0.16);
+                    gain.gain.setValueAtTime(0.01, now);
+                    gain.gain.linearRampToValueAtTime(0.2, now + 0.03);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.start(now);
+                    osc.stop(now + 0.21);
+                } catch(e){}
+            }
+
+            overlay.addEventListener('click', async () => {
+                await initAudio();
+                overlay.classList.add('opacity-0', 'pointer-events-none');
+                setTimeout(() => overlay.remove(), 500);
+            });
+
+            function resizeCanvas() {
+                width = window.innerWidth;
+                height = window.innerHeight;
+                canvas.width = width * window.devicePixelRatio;
+                canvas.height = height * window.devicePixelRatio;
+                ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+            }
+            window.addEventListener('resize', resizeCanvas);
+            resizeCanvas();
+
+            // 多招式關卡資料結構 (增加 isFullScreen 欄位)
+            let stages = [];
+
+            function loadSavedStages() {
+                const saved = localStorage.getItem('jutsu_multi_stages');
+                if (saved) {
+                    try { stages = JSON.parse(saved); } catch(e) { setDefaultStages(); }
+                } else {
+                    setDefaultStages();
+                }
+                updateStageDisplay();
+            }
+
+            function setDefaultStages() {
+                const cx = width / 2;
+                const cy = height / 2;
+                stages = [
+                    {
+                        name: "招式一：火遁 • 豪火球",
+                        mediaUrl: DEFAULT_GIF_URL,
+                        isFullScreen: false,
+                        audioUrl: DEFAULT_AUDIO_URL,
+                        colorTheme: ['#ffe066','#fb8500','#ff4d6d'],
+                        nodes: [
+                            { x: cx - 260, y: cy + 120, reached: false, radius: 35 },
+                            { x: cx - 100, y: cy + 200, reached: false, radius: 35 },
+                            { x: cx + 60,  y: cy - 100, reached: false, radius: 35 },
+                            { x: cx + 240, y: cy + 140, reached: false, radius: 35 }
+                        ]
+                    },
+                    {
+                        name: "招式二：雷遁 • 千鳥陣",
+                        mediaUrl: DEFAULT_GIF_URL,
+                        isFullScreen: false,
+                        audioUrl: DEFAULT_AUDIO_URL,
+                        colorTheme: ['#38bdf8','#60a5fa','#c084fc'],
+                        nodes: [
+                            { x: cx - 200, y: cy - 120, reached: false, radius: 35 },
+                            { x: cx + 200, y: cy - 120, reached: false, radius: 35 },
+                            { x: cx + 240, y: cy + 140, reached: false, radius: 35 },
+                            { x: cx,       y: cy + 220, reached: false, radius: 35 },
+                            { x: cx - 240, y: cy + 140, reached: false, radius: 35 }
+                        ]
+                    },
+                    {
+                        name: "招式三：終極 • 奧義召喚",
+                        mediaUrl: DEFAULT_GIF_URL,
+                        isFullScreen: true,
+                        audioUrl: DEFAULT_AUDIO_URL,
+                        colorTheme: ['#ffaa00','#ff0055','#00ffff'],
+                        nodes: [
+                            { x: cx - 180, y: cy - 180, reached: false, radius: 35 },
+                            { x: cx + 180, y: cy - 180, reached: false, radius: 35 },
+                            { x: cx + 260, y: cy,       reached: false, radius: 35 },
+                            { x: cx + 180, y: cy + 180, reached: false, radius: 35 },
+                            { x: cx - 180, y: cy + 180, reached: false, radius: 35 },
+                            { x: cx - 260, y: cy,       reached: false, radius: 35 }
+                        ]
+                    }
+                ];
+            }
+
+            let activeNodeIndex = 0;
+            let particles = [];
+            let fireStreaks = [];
+            let handPos = { x: width / 2, y: height / 2, active: false };
+            let useCamera = true;
+            let handLandmarker = undefined;
+            let webcamRunning = false;
+
+            // 模式切換邏輯
+            editToggleBtn.addEventListener('click', () => {
+                isEditMode = !isEditMode;
+                if (isEditMode) {
+                    editToggleBtn.textContent = "完成並體驗";
+                    editToggleBtn.className = "px-2.5 py-1 bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs rounded-lg transition";
+                    playControls.classList.add('hidden');
+                    editorControls.classList.remove('hidden');
+                    loadStageToEditor(editingStageIndex);
+                } else {
+                    editToggleBtn.textContent = "編輯模式";
+                    editToggleBtn.className = "px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs rounded-lg transition";
+                    playControls.classList.remove('hidden');
+                    editorControls.classList.add('hidden');
+                    saveStagesToStorage();
+                    resetStage();
+                }
+            });
+
+            stageSelect.addEventListener('change', (e) => {
+                editingStageIndex = parseInt(e.target.value);
+                loadStageToEditor(editingStageIndex);
+            });
+
+            function loadStageToEditor(idx) {
+                const stage = stages[idx];
+                stageMediaInput.value = stage.mediaUrl || '';
+                fullScreenCheckbox.checked = !!stage.isFullScreen;
+                stageAudioInput.value = stage.audioUrl || '';
+                renderEditorNodeList(idx);
+            }
+
+            stageMediaInput.addEventListener('input', (e) => { stages[editingStageIndex].mediaUrl = e.target.value; });
+            fullScreenCheckbox.addEventListener('change', (e) => { stages[editingStageIndex].isFullScreen = e.target.checked; });
+            stageAudioInput.addEventListener('input', (e) => { stages[editingStageIndex].audioUrl = e.target.value; });
+
+            function renderEditorNodeList(stageIdx) {
+                nodeList.innerHTML = '';
+                const nodes = stages[stageIdx].nodes;
+                nodes.forEach((node, idx) => {
+                    const item = document.createElement('div');
+                    item.className = "bg-zinc-900/80 p-1.5 rounded-lg border border-zinc-800 text-xs flex justify-between items-center";
+                    item.innerHTML = `
+                        <span class="font-bold text-amber-400">點點 #${idx + 1} (${Math.round(node.x)}, ${Math.round(node.y)})</span>
+                        <button onclick="removeEditorNode(${stageIdx}, ${idx})" class="text-rose-400 hover:text-rose-300 text-[10px] underline">刪除</button>
+                    `;
+                    nodeList.appendChild(item);
+                });
+            }
+
+            window.removeEditorNode = function(stageIdx, nodeIdx) {
+                stages[stageIdx].nodes.splice(nodeIdx, 1);
+                renderEditorNodeList(stageIdx);
+                updateProgress();
+            };
+
+            saveConfigBtn.addEventListener('click', () => {
+                saveStagesToStorage();
+                alert("所有招式與結界點配置已儲存！");
+            });
+
+            clearStageNodesBtn.addEventListener('click', () => {
+                if (confirm("確定要清空當前招式的結界點嗎？")) {
+                    stages[editingStageIndex].nodes = [];
+                    renderEditorNodeList(editingStageIndex);
+                    updateProgress();
+                }
+            });
+
+            function saveStagesToStorage() {
+                localStorage.setItem('jutsu_multi_stages', JSON.stringify(stages));
+            }
+
+            function updateStageDisplay() {
+                const currentStage = stages[currentStageIndex];
+                stageTitle.querySelector('span').textContent = `當前招式：${currentStage.name}`;
+                stageBadge.textContent = `關卡 ${currentStageIndex + 1}/${stages.length}`;
+                updateProgress();
+            }
+
+            function updateProgress() {
+                const activeNodes = isEditMode ? stages[editingStageIndex].nodes : stages[currentStageIndex].nodes;
+                const reachedCount = activeNodes.filter(n => n.reached).length;
+                progressText.textContent = `已解鎖: ${reachedCount} / ${activeNodes.length}`;
+            }
+
+            function resetStage() {
+                stages[currentStageIndex].nodes.forEach(n => n.reached = false);
+                activeNodeIndex = 0;
+                particles = [];
+                fireStreaks = [];
+                mediaContainer.classList.add('opacity-0');
+                rewardVideo.classList.add('hidden');
+                rewardImg.classList.add('hidden');
+                rewardVideo.pause();
+                updateProgress();
+            }
+
+            resetBtn.addEventListener('click', resetStage);
+
+            // 滑鼠編輯點點事件
+            canvas.addEventListener('pointerdown', (e) => {
+                if (!isEditMode) return;
+                const rect = canvas.getBoundingClientRect();
+                const mouseX = e.clientX - rect.left;
+                const mouseY = e.clientY - rect.top;
+                const activeNodes = stages[editingStageIndex].nodes;
+
+                for (let i = 0; i < activeNodes.length; i++) {
+                    const dist = Math.hypot(mouseX - activeNodes[i].x, mouseY - activeNodes[i].y);
+                    if (dist < activeNodes[i].radius + 10) {
+                        draggingNodeIndex = i;
+                        return;
+                    }
+                }
+
+                activeNodes.push({ x: mouseX, y: mouseY, reached: false, radius: 35 });
+                renderEditorNodeList(editingStageIndex);
+                updateProgress();
+            });
+
+            canvas.addEventListener('pointermove', (e) => {
+                if (isEditMode && draggingNodeIndex >= 0) {
+                    const rect = canvas.getBoundingClientRect();
+                    const activeNodes = stages[editingStageIndex].nodes;
+                    activeNodes[draggingNodeIndex].x = e.clientX - rect.left;
+                    activeNodes[draggingNodeIndex].y = e.clientY - rect.top;
+                    renderEditorNodeList(editingStageIndex);
+                } else if (!useCamera || !handPos.active) {
+                    handPos.x = e.clientX;
+                    handPos.y = e.clientY;
+                    handPos.active = true;
+                }
+            });
+
+            canvas.addEventListener('pointerup', () => { draggingNodeIndex = -1; });
+
+            // 相機追蹤
+            modeToggleBtn.addEventListener('click', () => {
+                useCamera = !useCamera;
+                modeToggleBtn.textContent = useCamera ? '切換: 相機追蹤' : '切換: 滑鼠模式';
+                if (!useCamera) {
+                    camStatus.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-400"></span> 已切換為滑鼠互動模式';
+                } else {
+                    camStatus.innerHTML = '<span class="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span> 啟動相機追蹤中...';
+                    startWebcam();
+                }
+            });
+
+            async function setupMediaPipe() {
+                try {
+                    const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm");
+                    handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                        baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task", delegate: "GPU" },
+                        runningMode: "VIDEO", numHands: 1
+                    });
+                    startWebcam();
+                } catch (err) {
+                    useCamera = false;
+                    camStatus.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-500"></span> 相機未成功載入，已切換滑鼠模式';
+                }
+            }
+
+            async function startWebcam() {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+                    videoElement.srcObject = stream;
+                    videoElement.addEventListener("loadeddata", predictWebcam);
+                    camStatus.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 相機追蹤中';
+                    webcamRunning = true;
+                } catch (err) {
+                    useCamera = false;
+                    camStatus.innerHTML = '<span class="w-2 h-2 rounded-full bg-amber-500"></span> 相機未授權，切換滑鼠模式';
+                }
+            }
+
+            let lastVideoTime = -1;
+            async function predictWebcam() {
+                if (!useCamera || !handLandmarker) return;
+                if (videoElement.currentTime !== lastVideoTime) {
+                    lastVideoTime = videoElement.currentTime;
+                    const results = handLandmarker.detectForVideo(videoElement, performance.now());
+                    if (results.landmarks && results.landmarks.length > 0) {
+                        const indexTip = results.landmarks[0][8];
+                        handPos.x = (1 - indexTip.x) * width;
+                        handPos.y = indexTip.y * height;
+                        handPos.active = true;
+                    } else { handPos.active = false; }
+                }
+                if (webcamRunning) requestAnimationFrame(predictWebcam);
+            }
+
+            // 圓形光點粒子
+            class GlowParticle {
+                constructor(x, y, color, sizeMult, isFire = false) {
+                    this.x = x; this.y = y; this.color = color; this.isFire = isFire;
+                    const angle = Math.random() * Math.PI * 2;
+                    const speed = (Math.random() * (isFire ? 16 : 9) + 2) * sizeMult;
+                    this.vx = Math.cos(angle) * speed;
+                    this.vy = Math.sin(angle) * speed;
+                    this.friction = 0.94;
+                    this.gravity = isFire ? 0.04 : 0.06;
+                    this.alpha = 1.0;
+                    this.decay = Math.random() * 0.012 + 0.006;
+                    this.radius = (Math.random() * 6 + 3) * sizeMult;
+                }
+                update() {
+                    this.vx *= this.friction; this.vy *= this.friction;
+                    this.vy += this.gravity; this.x += this.vx; this.y += this.vy;
+                    this.alpha -= this.decay;
+                }
+                draw(context) {
+                    if (this.alpha <= 0) return;
+                    context.save();
+                    context.globalAlpha = Math.max(0, this.alpha);
+                    context.shadowColor = this.color;
+                    context.shadowBlur = this.isFire ? 20 : 10;
+                    context.fillStyle = this.color;
+                    context.beginPath();
+                    context.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                    context.fill();
+                    context.fillStyle = '#ffffff';
+                    context.beginPath();
+                    context.arc(this.x, this.y, this.radius * 0.4, 0, Math.PI * 2);
+                    context.fill();
+                    context.restore();
+                }
+            }
+
+            class FireStreak {
+                constructor(startX, startY, endX, endY, onComplete) {
+                    this.startX = startX; this.startY = startY;
+                    this.endX = endX; this.endY = endY;
+                    this.progress = 0; this.speed = 0.06; this.active = true;
+                    this.onComplete = onComplete; this.sparkles = [];
+                }
+                update() {
+                    if (!this.active) return;
+                    this.progress += this.speed;
+                    const cx = this.startX + (this.endX - this.startX) * this.progress;
+                    const cy = this.startY + (this.endY - this.startY) * this.progress;
+                    for (let i = 0; i < 2; i++) {
+                        this.sparkles.push({
+                            x: cx + (Math.random() - 0.5) * 12, y: cy + (Math.random() - 0.5) * 12,
+                            vx: (Math.random() - 0.5) * 3, vy: (Math.random() - 0.5) * 3 - 1,
+                            alpha: 1.0, size: Math.random() * 5 + 3,
+                            color: Math.random() > 0.4 ? '#38bdf8' : '#f59e0b'
+                        });
+                    }
+                    if (this.progress >= 1) {
+                        this.active = false;
+                        if (this.onComplete) this.onComplete();
+                    }
+                    for (let i = this.sparkles.length - 1; i >= 0; i--) {
+                        let sp = this.sparkles[i];
+                        sp.x += sp.vx; sp.y += sp.vy; sp.alpha -= 0.04;
+                        if (sp.alpha <= 0) this.sparkles.splice(i, 1);
+                    }
+                }
+                draw(context) {
+                    for (let sp of this.sparkles) {
+                        context.save();
+                        context.globalAlpha = Math.max(0, sp.alpha);
+                        context.fillStyle = sp.color;
+                        context.shadowColor = sp.color;
+                        context.shadowBlur = 12;
+                        context.beginPath();
+                        context.arc(sp.x, sp.y, sp.size, 0, Math.PI * 2);
+                        context.fill();
+                        context.restore();
+                    }
+                }
+            }
+
+            // 當前關卡成功爆破與進度推進
+            async function triggerStageSuccess() {
+                const stage = stages[currentStageIndex];
+                
+                jutsuBannerText.textContent = stage.name;
+                jutsuSubBanner.textContent = `✨ STAGE ${currentStageIndex + 1} UNLOCKED ✨`;
+                jutsuBanner.style.opacity = '1';
+                setTimeout(() => { jutsuBanner.style.opacity = '0'; }, 2500);
+
+                // 音效播放
+                const audio = new Audio(stage.audioUrl || DEFAULT_AUDIO_URL);
+                audio.play().catch(e => console.log(e));
+
+                // 爆破光點粒子
+                const centerX = width / 2;
+                const centerY = height / 2;
+                const theme = stage.colorTheme || ['#ffe066','#fb8500','#ff4d6d'];
+                for (let i = 0; i < 140; i++) {
+                    const color = theme[Math.floor(Math.random() * theme.length)];
+                    particles.push(new GlowParticle(centerX, centerY, color, 1.5, true));
+                }
+
+                // 設定是否滿版全螢幕樣式
+                if (stage.isFullScreen) {
+                    mediaContainer.className = "absolute z-30 pointer-events-none transition-all duration-500 opacity-0 media-fullscreen";
+                } else {
+                    mediaContainer.className = "absolute z-30 pointer-events-none transition-all duration-500 opacity-0 media-default";
+                }
+
+                // 展現媒體
+                mediaContainer.classList.remove('opacity-0');
+                await playMediaItem(stage.mediaUrl || DEFAULT_GIF_URL);
+                mediaContainer.classList.add('opacity-0');
+
+                // 推進關卡 (Stage Progress)
+                if (currentStageIndex < stages.length - 1) {
+                    currentStageIndex++;
+                    updateStageDisplay();
+                    resetStage();
+                } else {
+                    // 全關卡通關（Grand Clearance）
+                    setTimeout(() => {
+                        alert("🎉 恭喜通關！您已完美解鎖所有忍者結界與終極奧義！");
+                        currentStageIndex = 0;
+                        updateStageDisplay();
+                        resetStage();
+                    }, 800);
+                }
+            }
+
+            function playMediaItem(url) {
+                return new Promise((resolve) => {
+                    const isVideo = url.match(/\.(mp4|webm|ogg)$/i);
+                    if (isVideo) {
+                        rewardImg.classList.add('hidden');
+                        rewardVideo.classList.remove('hidden');
+                        rewardVideo.src = url;
+                        rewardVideo.play().catch(e => resolve());
+                        rewardVideo.onended = () => resolve();
+                    } else {
+                        rewardVideo.classList.add('hidden');
+                        rewardImg.classList.remove('hidden');
+                        rewardImg.src = url + '?t=' + new Date().getTime();
+                        setTimeout(() => resolve(), 3500);
+                    }
+                });
+            }
+
+            function triggerNodeTouch(x, y) {
+                playTouchSound();
+                const theme = isEditMode ? ['#f59e0b', '#38bdf8'] : stages[currentStageIndex].colorTheme;
+                for (let i = 0; i < 35; i++) {
+                    const color = theme[Math.floor(Math.random() * theme.length)];
+                    particles.push(new GlowParticle(x, y, color, 0.9, false));
+                }
+            }
+
+            function animate() {
+                ctx.fillStyle = 'rgba(6, 6, 9, 0.25)';
+                ctx.fillRect(0, 0, width, height);
+
+                const activeStage = isEditMode ? stages[editingStageIndex] : stages[currentStageIndex];
+                const targetNodes = activeStage.nodes;
+
+                if (!isEditMode && handPos.active && activeNodeIndex < targetNodes.length) {
+                    const target = targetNodes[activeNodeIndex];
+                    const dist = Math.hypot(handPos.x - target.x, handPos.y - target.y);
+                    if (dist < target.radius + 15) {
+                        target.reached = true;
+                        triggerNodeTouch(target.x, target.y);
+                        if (activeNodeIndex > 0) {
+                            const prev = targetNodes[activeNodeIndex - 1];
+                            fireStreaks.push(new FireStreak(prev.x, prev.y, target.x, target.y, () => {
+                                if (activeNodeIndex >= targetNodes.length) triggerStageSuccess();
+                            }));
+                        } else if (targetNodes.length === 1) {
+                            triggerStageSuccess();
+                        }
+                        activeNodeIndex++;
+                        updateProgress();
+                    }
+                }
+
+                // 繪製連線
+                ctx.save();
+                ctx.beginPath();
+                let hasStarted = false;
+                for (let i = 0; i < targetNodes.length; i++) {
+                    if (targetNodes[i].reached || isEditMode) {
+                        if (!hasStarted) { ctx.moveTo(targetNodes[i].x, targetNodes[i].y); hasStarted = true; }
+                        else ctx.lineTo(targetNodes[i].x, targetNodes[i].y);
+                    }
+                }
+                if (hasStarted) {
+                    ctx.strokeStyle = isEditMode ? 'rgba(245, 158, 11, 0.5)' : '#38bdf8';
+                    ctx.lineWidth = 4;
+                    ctx.setLineDash(isEditMode ? [5, 5] : []);
+                    ctx.stroke();
+                }
+                ctx.restore();
+
+                // 繪製點點
+                const time = Date.now() * 0.003;
+                for (let i = 0; i < targetNodes.length; i++) {
+                    const node = targetNodes[i];
+                    ctx.save();
+                    if (node.reached) {
+                        ctx.beginPath();
+                        ctx.arc(node.x, node.y, node.radius * 0.8, 0, Math.PI * 2);
+                        ctx.fillStyle = '#38bdf8';
+                        ctx.shadowColor = '#38bdf8';
+                        ctx.shadowBlur = 15;
+                        ctx.fill();
+                    } else {
+                        const pulse = Math.sin(time + i) * 4;
+                        ctx.beginPath();
+                        ctx.arc(node.x, node.y, node.radius + pulse, 0, Math.PI * 2);
+                        ctx.strokeStyle = (i === activeNodeIndex || isEditMode) ? 'rgba(245, 158, 11, 0.8)' : 'rgba(150, 150, 170, 0.35)';
+                        ctx.lineWidth = 2;
+                        ctx.stroke();
+                    }
+                    ctx.fillStyle = node.reached ? '#060609' : '#ffffff';
+                    ctx.font = 'bold 12px Inter';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(i + 1, node.x, node.y);
+                    ctx.restore();
+                }
+
+                for (let i = fireStreaks.length - 1; i >= 0; i--) {
+                    fireStreaks[i].update();
+                    fireStreaks[i].draw(ctx);
+                    if (!fireStreaks[i].active && fireStreaks[i].sparkles.length === 0) fireStreaks.splice(i, 1);
+                }
+
+                for (let i = particles.length - 1; i >= 0; i--) {
+                    particles[i].update();
+                    particles[i].draw(ctx);
+                    if (particles[i].alpha <= 0) particles.splice(i, 1);
+                }
+
+                if (handPos.active && !isEditMode) {
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.arc(handPos.x, handPos.y, 24, 0, Math.PI * 2);
+                    ctx.strokeStyle = '#ff6b00';
+                    ctx.lineWidth = 3;
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.arc(handPos.x, handPos.y, 8, 0, Math.PI * 2);
+                    ctx.fillStyle = '#38bdf8';
+                    ctx.fill();
+                    ctx.restore();
+                }
+
+                requestAnimationFrame(animate);
+            }
+
+            loadSavedStages();
+            setupMediaPipe();
+            requestAnimationFrame(animate);
+        };
+    </script>
+</body>
+</html>
